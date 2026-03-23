@@ -651,14 +651,20 @@ def main():
     clock = pygame.time.Clock()
 
     info    = pygame.display.Info()
-    H       = int(info.current_h * 0.92)
-    CELL    = max(16, H // ROWS)
-    H       = CELL * ROWS
+    # 9:16 전체 프레임이 화면 높이에 맞게 들어오도록 W를 역산
+    H_FRAME = int(info.current_h * 0.92)
+    W       = int(H_FRAME * 9 / 16)
+    # W = COLS*CELL + SIDEBAR = 16*CELL  →  CELL = W // 16
+    CELL    = max(16, W // 16)
+    W       = CELL * 16             # W를 CELL 배수로 정렬
+    H_FRAME = int(W * 16 / 9)      # 9:16 프레임 높이 (정렬)
+    H       = CELL * ROWS           # 게임 콘텐츠 높이
     SIDEBAR = CELL * 6
-    W       = COLS * CELL + SIDEBAR
     CAM_W   = SIDEBAR - 16
     CAM_H   = int(CAM_W * 3 / 4)
     UI_SCALE = CELL / 32
+
+    PAD_Y   = (H_FRAME - H) // 2   # 위아래 여백
 
     def mkfont(names, size, bold=False):
         for n in names:
@@ -679,14 +685,15 @@ def main():
     game       = Game()
     started    = False
     fullscreen = False
-    screen     = pygame.display.set_mode((W, H), pygame.RESIZABLE)
-    canvas     = pygame.Surface((W, H))
+    screen     = pygame.display.set_mode((W, H_FRAME), pygame.RESIZABLE)
+    canvas     = pygame.Surface((W, H))       # game content
+    frame      = pygame.Surface((W, H_FRAME)) # 9:16 output frame
 
     def toggle_fullscreen():
         nonlocal fullscreen, screen
         fullscreen = not fullscreen
         screen = pygame.display.set_mode(
-            (0, 0) if fullscreen else (W, H),
+            (0, 0) if fullscreen else (W, H_FRAME),
             pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
 
     while True:
@@ -722,10 +729,14 @@ def main():
         if not started or game.over:
             draw_overlay(canvas, game, fonts, started)
 
+        # Compose: game canvas centred vertically in 9:16 frame
+        frame.fill(BG)
+        frame.blit(canvas, (0, PAD_Y))
+
         sw, sh   = screen.get_size()
-        scale    = min(sw / W, sh / H)
-        scaled_w = int(W * scale);  scaled_h = int(H * scale)
-        scaled   = pygame.transform.smoothscale(canvas, (scaled_w, scaled_h))
+        scale    = min(sw / W, sh / H_FRAME)
+        scaled_w = int(W * scale);  scaled_h = int(H_FRAME * scale)
+        scaled   = pygame.transform.smoothscale(frame, (scaled_w, scaled_h))
         screen.fill((0, 0, 0))
         screen.blit(scaled, ((sw - scaled_w) // 2, (sh - scaled_h) // 2))
         pygame.display.flip()
