@@ -216,15 +216,14 @@ def tracking_worker(cap):
             rx = int(r_eye.x*iw); ry = int(r_eye.y*ih)
             nx = int(nose.x*iw);  ny = int(nose.y*ih)
             eye_col = (0, 220, 80) if abs(roll_raw) < ROLL_TRIG else (255, 160, 0)
-            cv2.line(frame,   (lx, ly), (rx, ry), eye_col,       2)
-            cv2.circle(frame, (lx, ly), 5,         (0, 200, 255), -1)
-            cv2.circle(frame, (rx, ry), 5,         (0, 200, 255), -1)
-            cv2.circle(frame, (nx, ny), 6,         (255, 220, 0), -1)
-            if calibrated:
-                ecx = int(eye_cx*iw); ecy = int(eye_cy*ih)
-                cv2.arrowedLine(frame, (ecx, ecy),
-                                (int(ecx + rel_yaw*iw*0.4), ecy),
-                                (255, 80, 80), 2, tipLength=0.3)
+            # 눈 점
+            cv2.circle(frame, (lx, ly), 5, eye_col,      -1)
+            cv2.circle(frame, (rx, ry), 5, eye_col,      -1)
+            cv2.circle(frame, (nx, ny), 4, (255, 220, 0), -1)
+            # 눈 사이 중앙 30% 구간만 선으로 표시
+            ml = (int(lx + (rx-lx)*0.35), int(ly + (ry-ly)*0.35))
+            mr = (int(lx + (rx-lx)*0.65), int(ly + (ry-ly)*0.65))
+            cv2.line(frame, ml, mr, eye_col, 2)
 
         if not calibrated and calib_buf:
             prog   = len(calib_buf) / CALIB_N
@@ -685,7 +684,8 @@ def main():
     game       = Game()
     started    = False
     fullscreen = False
-    screen     = pygame.display.set_mode((W, H_FRAME), pygame.RESIZABLE)
+    # SCALED: SDL이 W×H_FRAME 논리 해상도를 화면에 맞게 하드웨어 스케일링
+    screen     = pygame.display.set_mode((W, H_FRAME), pygame.SCALED | pygame.RESIZABLE)
     canvas     = pygame.Surface((W, H))       # game content
     frame      = pygame.Surface((W, H_FRAME)) # 9:16 output frame
 
@@ -693,8 +693,8 @@ def main():
         nonlocal fullscreen, screen
         fullscreen = not fullscreen
         screen = pygame.display.set_mode(
-            (0, 0) if fullscreen else (W, H_FRAME),
-            pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
+            (W, H_FRAME),
+            pygame.SCALED | (pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE))
 
     while True:
         clock.tick(FPS)
@@ -709,7 +709,9 @@ def main():
                 if event.key == pygame.K_F11:
                     toggle_fullscreen(); continue
                 if not started:
-                    if event.key == pygame.K_RETURN: started = True
+                    if event.key == pygame.K_RETURN:
+                        started = True
+                        game.t_fall = time.time()  # 대기 시간 무시
                     continue
                 if event.key == pygame.K_r:
                     game = Game(); continue
@@ -733,12 +735,8 @@ def main():
         frame.fill(BG)
         frame.blit(canvas, (0, PAD_Y))
 
-        sw, sh   = screen.get_size()
-        scale    = min(sw / W, sh / H_FRAME)
-        scaled_w = int(W * scale);  scaled_h = int(H_FRAME * scale)
-        scaled   = pygame.transform.smoothscale(frame, (scaled_w, scaled_h))
-        screen.fill((0, 0, 0))
-        screen.blit(scaled, ((sw - scaled_w) // 2, (sh - scaled_h) // 2))
+        # SCALED 모드: SDL이 알아서 화면에 맞게 스케일링
+        screen.blit(frame, (0, 0))
         pygame.display.flip()
 
 
