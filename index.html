@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Motion Catch Game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a1a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', sans-serif;
+      color: white;
+      overflow: hidden;
+    }
+
+    #ui {
+      display: flex;
+      gap: 40px;
+      margin-bottom: 16px;
+      font-size: 22px;
+      font-weight: bold;
+    }
+
+    .stat { display: flex; flex-direction: column; align-items: center; }
+    .stat span:first-child { font-size: 12px; color: #aaa; letter-spacing: 2px; text-transform: uppercase; }
+    .stat span:last-child { color: #7ef7ff; font-size: 28px; }
+
+    #game-container {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 0 60px rgba(100, 200, 255, 0.3);
+      border: 2px solid rgba(100, 200, 255, 0.2);
+    }
+
+    #webcam {
+      display: block;
+      transform: scaleX(-1);
+    }
+
+    #canvas {
+      position: absolute;
+      top: 0; left: 0;
+      transform: scaleX(-1);
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 10;
+    }
+
+    #overlay h1 {
+      font-size: 48px;
+      color: #7ef7ff;
+      text-shadow: 0 0 30px rgba(126, 247, 255, 0.8);
+      margin-bottom: 12px;
+    }
+
+    #overlay p {
+      color: #ccc;
+      font-size: 16px;
+      margin-bottom: 32px;
+      text-align: center;
+      line-height: 1.7;
+    }
+
+    #start-btn {
+      padding: 14px 40px;
+      font-size: 18px;
+      font-weight: bold;
+      background: linear-gradient(135deg, #7ef7ff, #4a9eff);
+      color: #0a0a1a;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 0 20px rgba(126, 247, 255, 0.5);
+    }
+
+    #start-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 30px rgba(126, 247, 255, 0.8);
+    }
+
+    #status {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #888;
+    }
+
+    #combo-display {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateX(0);
+      font-size: 24px;
+      font-weight: bold;
+      color: #ffd700;
+      text-shadow: 0 0 10px rgba(255, 215, 0, 0.8);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 5;
+    }
+  </style>
+</head>
+<body>
+
+<div id="ui">
+  <div class="stat">
+    <span>점수</span>
+    <span id="score-display">0</span>
+  </div>
+  <div class="stat">
+    <span>목숨</span>
+    <span id="lives-display">❤️❤️❤️</span>
+  </div>
+  <div class="stat">
+    <span>레벨</span>
+    <span id="level-display">1</span>
+  </div>
+</div>
+
+<div id="game-container">
+  <video id="webcam" autoplay playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="combo-display"></div>
+
+  <div id="overlay">
+    <h1>✋ Motion Catch</h1>
+    <p>웹캠 앞에서 손을 흔들어 바구니를 조종하세요!<br>떨어지는 공을 받아 점수를 올리세요.<br>빨간 폭탄은 피하세요 💣</p>
+    <button id="start-btn">게임 시작</button>
+    <div id="status">웹캠 권한을 허용해주세요...</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+const W = 640, H = 480;
+
+const webcam = document.getElementById('webcam');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('start-btn');
+const statusEl = document.getElementById('status');
+const scoreDisplay = document.getElementById('score-display');
+const livesDisplay = document.getElementById('lives-display');
+const levelDisplay = document.getElementById('level-display');
+const comboDisplay = document.getElementById('combo-display');
+
+canvas.width = W;
+canvas.height = H;
+webcam.width = W;
+webcam.height = H;
+
+// Game state
+let gameRunning = false;
+let score = 0;
+let lives = 3;
+let level = 1;
+let combo = 0;
+let comboTimer = null;
+let handX = W / 2;
+let smoothHandX = W / 2;
+let balls = [];
+let particles = [];
+let frameCount = 0;
+let gameOver = false;
+
+const BASKET_W = 100;
+const BASKET_H = 30;
+const BASKET_Y = H - 50;
+
+// MediaPipe Hands setup
+const hands = new Hands({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 0,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.5
+});
+
+hands.onResults((results) => {
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const landmarks = results.multiHandLandmarks[0];
+    // Use palm center (landmark 9) for position
+    const palm = landmarks[9];
+    // Mirror because video is mirrored
+    handX = (1 - palm.x) * W;
+  }
+});
+
+// Camera
+let camera;
+
+async function initCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: W, height: H } });
+    webcam.srcObject = stream;
+    await new Promise(resolve => webcam.onloadedmetadata = resolve);
+
+    camera = new Camera(webcam, {
+      onFrame: async () => {
+        await hands.send({ image: webcam });
+      },
+      width: W,
+      height: H
+    });
+    camera.start();
+    statusEl.textContent = '✅ 웹캠 연결됨 - 손을 카메라 앞에 올려보세요!';
+    startBtn.disabled = false;
+  } catch (e) {
+    statusEl.textContent = '❌ 웹캠 접근 실패: ' + e.message;
+  }
+}
+
+function spawnBall() {
+  const isBomb = Math.random() < 0.2 + level * 0.02;
+  const colors = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#c77dff'];
+  balls.push({
+    x: Math.random() * (W - 40) + 20,
+    y: -20,
+    r: isBomb ? 22 : 16 + Math.random() * 8,
+    speed: 2.5 + level * 0.5 + Math.random() * 2,
+    isBomb,
+    color: isBomb ? '#ff4444' : colors[Math.floor(Math.random() * colors.length)],
+    rotation: 0,
+    rotSpeed: (Math.random() - 0.5) * 0.1
+  });
+}
+
+function spawnParticles(x, y, color, count = 12) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+    const speed = 2 + Math.random() * 4;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0,
+      decay: 0.03 + Math.random() * 0.02,
+      r: 4 + Math.random() * 4,
+      color
+    });
+  }
+}
+
+function showCombo(n) {
+  if (n < 3) return;
+  comboDisplay.textContent = `${n}x COMBO! 🔥`;
+  comboDisplay.style.opacity = '1';
+  clearTimeout(comboTimer);
+  comboTimer = setTimeout(() => {
+    comboDisplay.style.opacity = '0';
+  }, 1000);
+}
+
+function updateLives() {
+  livesDisplay.textContent = '❤️'.repeat(Math.max(0, lives)) + '🖤'.repeat(Math.max(0, 3 - lives));
+}
+
+function checkGameOver() {
+  if (lives <= 0) {
+    gameRunning = false;
+    gameOver = true;
+    showGameOver();
+  }
+}
+
+function showGameOver() {
+  overlay.innerHTML = `
+    <h1 style="color:#ff6b6b;text-shadow:0 0 30px rgba(255,107,107,0.8)">Game Over</h1>
+    <p style="font-size:20px;margin-bottom:8px">최종 점수: <strong style="color:#7ef7ff;font-size:28px">${score}</strong></p>
+    <p style="margin-bottom:32px;color:#aaa">레벨 ${level} 도달</p>
+    <button id="start-btn" style="padding:14px 40px;font-size:18px;font-weight:bold;background:linear-gradient(135deg,#ff6b6b,#ff4444);color:white;border:none;border-radius:50px;cursor:pointer;box-shadow:0 0 20px rgba(255,107,107,0.5)">
+      다시 시작
+    </button>
+  `;
+  overlay.style.display = 'flex';
+  document.getElementById('start-btn').onclick = startGame;
+}
+
+function startGame() {
+  score = 0;
+  lives = 3;
+  level = 1;
+  combo = 0;
+  frameCount = 0;
+  balls = [];
+  particles = [];
+  gameOver = false;
+  gameRunning = true;
+  overlay.style.display = 'none';
+  updateLives();
+  scoreDisplay.textContent = '0';
+  levelDisplay.textContent = '1';
+  requestAnimationFrame(gameLoop);
+}
+
+function gameLoop() {
+  if (!gameRunning) return;
+
+  frameCount++;
+  ctx.clearRect(0, 0, W, H);
+
+  // Smooth hand tracking
+  smoothHandX += (handX - smoothHandX) * 0.2;
+
+  // Level up
+  if (score >= level * 10) {
+    level++;
+    levelDisplay.textContent = level;
+  }
+
+  // Spawn balls
+  const spawnRate = Math.max(30, 90 - level * 5);
+  if (frameCount % spawnRate === 0) spawnBall();
+
+  // Draw basket
+  const bx = Math.max(BASKET_W / 2, Math.min(W - BASKET_W / 2, smoothHandX));
+  drawBasket(bx, BASKET_Y);
+
+  // Draw hand indicator
+  ctx.beginPath();
+  ctx.arc(smoothHandX, BASKET_Y - 40, 8, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(126, 247, 255, 0.6)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(smoothHandX, BASKET_Y - 40, 14, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(126, 247, 255, 0.3)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Update & draw balls
+  for (let i = balls.length - 1; i >= 0; i--) {
+    const b = balls[i];
+    b.y += b.speed;
+    b.rotation += b.rotSpeed;
+
+    // Catch check
+    if (
+      b.y + b.r >= BASKET_Y - BASKET_H / 2 &&
+      b.y - b.r <= BASKET_Y + BASKET_H / 2 &&
+      b.x >= bx - BASKET_W / 2 &&
+      b.x <= bx + BASKET_W / 2
+    ) {
+      if (b.isBomb) {
+        lives--;
+        updateLives();
+        spawnParticles(b.x, b.y, '#ff4444', 20);
+        combo = 0;
+        checkGameOver();
+      } else {
+        combo++;
+        const pts = combo >= 5 ? 3 : combo >= 3 ? 2 : 1;
+        score += pts;
+        scoreDisplay.textContent = score;
+        showCombo(combo);
+        spawnParticles(b.x, b.y, b.color);
+      }
+      balls.splice(i, 1);
+      continue;
+    }
+
+    // Missed ball
+    if (b.y - b.r > H) {
+      if (!b.isBomb) {
+        lives--;
+        updateLives();
+        combo = 0;
+        checkGameOver();
+      }
+      balls.splice(i, 1);
+      continue;
+    }
+
+    drawBall(b);
+  }
+
+  // Update & draw particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.15;
+    p.life -= p.decay;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+function drawBall(b) {
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.rotate(b.rotation);
+
+  if (b.isBomb) {
+    // Bomb
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+    const grad = ctx.createRadialGradient(-4, -4, 2, 0, 0, b.r);
+    grad.addColorStop(0, '#ff8888');
+    grad.addColorStop(1, '#880000');
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Fuse
+    ctx.beginPath();
+    ctx.moveTo(0, -b.r);
+    ctx.quadraticCurveTo(8, -b.r - 10, 4, -b.r - 20);
+    ctx.strokeStyle = '#ffaa00';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Spark
+    ctx.beginPath();
+    ctx.arc(4, -b.r - 20, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffff00';
+    ctx.fill();
+
+    ctx.fillStyle = 'white';
+    ctx.font = `${b.r * 0.8}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('💣', 0, 2);
+  } else {
+    // Ball glow
+    const glow = ctx.createRadialGradient(-b.r * 0.3, -b.r * 0.3, b.r * 0.1, 0, 0, b.r);
+    glow.addColorStop(0, 'white');
+    glow.addColorStop(0.3, b.color);
+    glow.addColorStop(1, b.color + '88');
+    ctx.beginPath();
+    ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+
+    // Shine
+    ctx.beginPath();
+    ctx.ellipse(-b.r * 0.25, -b.r * 0.3, b.r * 0.2, b.r * 0.12, -0.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawBasket(x, y) {
+  const w = BASKET_W;
+  const h = BASKET_H;
+
+  // Basket glow
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = '#7ef7ff';
+
+  // Basket body
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2, y - h / 2);
+  ctx.lineTo(x - w / 2 + 8, y + h / 2);
+  ctx.lineTo(x + w / 2 - 8, y + h / 2);
+  ctx.lineTo(x + w / 2, y - h / 2);
+  ctx.closePath();
+
+  const grad = ctx.createLinearGradient(x - w / 2, y - h / 2, x + w / 2, y + h / 2);
+  grad.addColorStop(0, 'rgba(126, 247, 255, 0.9)');
+  grad.addColorStop(1, 'rgba(74, 158, 255, 0.9)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Basket rim
+  ctx.beginPath();
+  ctx.moveTo(x - w / 2 - 4, y - h / 2);
+  ctx.lineTo(x + w / 2 + 4, y - h / 2);
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+}
+
+// Init
+startBtn.disabled = true;
+startBtn.onclick = startGame;
+initCamera();
+</script>
+</body>
+</html>
