@@ -711,7 +711,11 @@ def main():
                 if not started:
                     if event.key == pygame.K_RETURN:
                         started = True
-                        game.t_fall = time.time()  # 대기 시간 무시
+                        game.t_fall = time.time()
+                        with face.lock:   # 시작 전 쌓인 제스처 초기화
+                            face.rot_cw = face.rot_ccw = False
+                            face.move_left = face.move_right = False
+                            face.hard_drop = False
                     continue
                 if event.key == pygame.K_r:
                     game = Game(); continue
