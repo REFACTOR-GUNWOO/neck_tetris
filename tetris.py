@@ -718,7 +718,12 @@ def main():
                             face.hard_drop = False
                     continue
                 if event.key == pygame.K_r:
-                    game = Game(); continue
+                    game = Game()
+                    with face.lock:
+                        face.rot_cw = face.rot_ccw = False
+                        face.move_left = face.move_right = False
+                        face.hard_drop = False
+                    continue
                 if not game.over:
                     if event.key == pygame.K_LEFT  and game.valid(dx=-1): game.piece.x -= 1
                     if event.key == pygame.K_RIGHT and game.valid(dx=1):  game.piece.x += 1
